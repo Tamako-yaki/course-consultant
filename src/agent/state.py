@@ -4,7 +4,6 @@ from langchain_core.messages import BaseMessage
 
 class AgentState(TypedDict):
     question: str
-    sub_questions: List[str]
     generation: str
     retrieved_docs: List[str]
     messages: Annotated[List[BaseMessage], add_messages]

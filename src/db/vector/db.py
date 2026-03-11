@@ -1,7 +1,7 @@
 import os
-import asyncio
-from langchain_milvus import Milvus
+from langchain_milvus import Milvus, BM25BuiltInFunction
 from db.vector.embedding import EmbeddingModel
+from langchain_classic.retrievers.multi_query import MultiQueryRetriever
 
 _embeddings = None
 
@@ -27,11 +27,13 @@ class MilvusStore:
         try:
             self.milvus_store = Milvus(
                 embedding_function=_get_embeddings(),
+                # builtin_function=BM25BuiltInFunction(),
+                # vector_field=["dense", "sparse"],
                 connection_args={
                     "host": os.getenv("MILVUS_HOST", "localhost"),
                     "port": os.getenv("MILVUS_PORT", "19530"),
                 },
-                collection_name="LangChainCollection",
+                collection_name=os.getenv("MILVUS_COLLECTION", "ntut_knowledge_base"),
                 auto_id=True,
                 drop_old=drop_old,
                 enable_dynamic_field=True,
@@ -52,6 +54,20 @@ class MilvusStore:
             },
         )
     
+    async def get_multi_query_retriever(self, llm):
+        await self.ensure_connected(drop_old=False)
+        base_retriever = self.milvus_store.as_retriever(
+            search_type="mmr",
+            search_kwargs={
+                "k": 20,
+                "fetch_k": 100,
+                "lambda_mult": 0.7,
+            },
+        )
+        return MultiQueryRetriever.from_llm(
+            retriever=base_retriever,
+            llm=llm,
+        )
     async def aadd_documents(self, documents, drop_old: bool = False):
         # 每次新增批次都重建 Milvus 實例，確保連線狀態與當前的 Event Loop 同步
         self.milvus_store = None 
