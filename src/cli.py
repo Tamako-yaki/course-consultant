@@ -1,7 +1,8 @@
+import asyncio
 from agent.graph import graph
 from agent.state import AgentState
 
-def main():
+async def main():
 
     thread_id = "course-consultant-thread"
     config = {
@@ -16,9 +17,8 @@ def main():
             break
 
         input_state = AgentState(question=user_input)
-
-        result = graph.invoke(input_state, config=config)
+        result = await graph.ainvoke(input_state, config=config)
         print("AI助手:", result["generation"])
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
