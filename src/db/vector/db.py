@@ -1,79 +1,101 @@
+from dotenv import load_dotenv
+load_dotenv()
 import os
 from langchain_milvus import Milvus, BM25BuiltInFunction
-from db.vector.embedding import EmbeddingModel
+from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_classic.retrievers.multi_query import MultiQueryRetriever
-
-_embeddings = None
-
-def _get_embeddings():
-    global _embeddings
-    if _embeddings is None:
-        _embeddings = EmbeddingModel().get_embeddings()
-    return _embeddings
+from langchain_community.cross_encoders import HuggingFaceCrossEncoder
+from langchain_classic.retrievers.document_compressors import CrossEncoderReranker
+from langchain_classic.retrievers import ContextualCompressionRetriever
+from langchain_core.documents import Document
 
 class MilvusStore:
-    
+    """
+    Milvus 向量資料庫的封裝類別，提供連線、檢索和新增文件的功能。
+    """
+
     def __init__(self):
-        self.milvus_store = None
-    
-    async def ensure_connected(self, drop_old: bool = False):
-        """在 async context 中初始化 Milvus 連線。
-        不使用全域 vector_store 快取，以避免 Event Loop 關閉導致的錯誤。
-        """
-        if self.milvus_store is not None:
-            return
-            
-        print("正在嘗試連接 Milvus 向量資料庫...")
-        try:
-            self.milvus_store = Milvus(
-                embedding_function=_get_embeddings(),
-                # builtin_function=BM25BuiltInFunction(),
-                # vector_field=["dense", "sparse"],
-                connection_args={
-                    "host": os.getenv("MILVUS_HOST", "localhost"),
-                    "port": os.getenv("MILVUS_PORT", "19530"),
-                },
-                collection_name=os.getenv("MILVUS_COLLECTION", "ntut_knowledge_base"),
-                auto_id=True,
-                drop_old=drop_old,
-                enable_dynamic_field=True,
-            )
-            print("Milvus 向量資料庫連線成功。")
-        except Exception as e:
-            print(f"連線 Milvus 失敗: {e}")
-            raise e
-    
-    async def get_retriever(self):
-        await self.ensure_connected(drop_old=False)
-        return self.milvus_store.as_retriever(
+        self._milvus_store: Milvus | None = None
+        self.host = os.getenv("MILVUS_HOST", "localhost")
+        self.port = os.getenv("MILVUS_PORT", "19530")
+        self.collection_name = os.getenv("MILVUS_COLLECTION", "ntut_knowledge_base")
+        self.embedding_device = os.getenv("EMBEDDING_DEVICE", "cpu")
+        self.embedding_model = "BAAI/bge-small-zh"
+        self.reranking_model = "BAAI/bge-reranker-base"
+
+    async def _init_vector_store(self, drop_old: bool = False) -> Milvus:
+        print(f"正在連線至 Milvus (Host: {self.host}, Port: {self.port})...")
+        
+        embeddings = HuggingFaceEmbeddings(
+            model_name=self.embedding_model,
+            model_kwargs={"device": self.embedding_device},
+            show_progress=False
+        )
+
+        return Milvus(
+            embedding_function=embeddings,
+            # builtin_function=BM25BuiltInFunction(),
+            # vector_field=["dense", "sparse"],
+            connection_args={
+                "host": self.host,
+                "port": self.port,
+            },
+            collection_name=self.collection_name,
+            auto_id=True,
+            drop_old=drop_old,
+            enable_dynamic_field=True, # 啟用動態欄位，允許不同文件有不同的 metadata 結構
+        )
+
+    async def get_store(self, drop_old: bool = False) -> Milvus:
+        if self._milvus_store is None:
+            try:
+                self._milvus_store = await self._init_vector_store(drop_old=drop_old)
+                print("Milvus 向量資料庫連線成功。")
+            except Exception as e:
+                print(f"連線 Milvus 失敗: {e}")
+                raise e
+        return self._milvus_store
+
+    async def get_base_retriever(
+        self, 
+        k: int = 50
+    ):
+        store = await self.get_store()
+        return store.as_retriever(
             search_type="mmr",
             search_kwargs={
-                "k": 5, # 最後回傳 5 筆
-                "fetch_k": 20, # 先從 Milvus 撈 20 筆候選
+                "k": k, # 最後回傳 k 筆
+                "fetch_k": k * 5, # 先從 Milvus 撈 k * 5 筆候選
                 "lambda_mult": 0.7, # 0~1 之間，越小越注重相似度，越大越注重多樣性
             },
         )
-    
-    async def get_multi_query_retriever(self, llm):
-        await self.ensure_connected(drop_old=False)
-        base_retriever = self.milvus_store.as_retriever(
-            search_type="mmr",
-            search_kwargs={
-                "k": 20,
-                "fetch_k": 100,
-                "lambda_mult": 0.7,
-            },
-        )
+
+    async def get_multi_query_retriever(self, llm, k: int = 50) -> MultiQueryRetriever:
+        base_retriever = await self.get_base_retriever(k=k)
         return MultiQueryRetriever.from_llm(
             retriever=base_retriever,
             llm=llm,
         )
-    async def aadd_documents(self, documents, drop_old: bool = False):
-        # 每次新增批次都重建 Milvus 實例，確保連線狀態與當前的 Event Loop 同步
-        self.milvus_store = None 
-        await self.ensure_connected(drop_old=drop_old)
-        if self.milvus_store is not None:
-            await self.milvus_store.aadd_documents(documents)   
-            print(f"Batch of {len(documents)} documents indexed successfully.")
-        else:
-            print("Milvus 向量資料庫未連線，無法新增文件。")
+
+    async def get_multi_query_rerank_retriever(self, llm, k: int = 20) -> ContextualCompressionRetriever:
+        multi_query_retriever = await self.get_multi_query_retriever(llm, k*5)
+
+        # 使用 CrossEncoder 進行重排序
+        model = HuggingFaceCrossEncoder(model_name=self.reranking_model)
+        compressor = CrossEncoderReranker(model=model, top_n=k)
+
+        return ContextualCompressionRetriever(
+            base_retriever=multi_query_retriever,
+            base_compressor=compressor,
+        )
+
+    async def aadd_documents(self, documents: list[Document], drop_old: bool = False) -> None:
+        store = await self.get_store(drop_old=drop_old)
+        try:
+            await store.aadd_documents(documents)
+            print(f"成功新增 {len(documents)} 筆文件到 Milvus。")
+        except Exception as e:
+            print(f"新增文件到 Milvus 失敗: {e}")
+            raise e
+
+milvus_store = MilvusStore()

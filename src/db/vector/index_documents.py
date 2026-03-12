@@ -1,12 +1,10 @@
 from langchain_core.documents import Document
 from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter
-from db.vector.db import MilvusStore
+from db.vector.db import milvus_store
 from db.vector.load_course_json import load_main_courses, load_standard_courses, load_syllabus_dir
 from pathlib import Path
-import os
 import asyncio
 
-milvus_store = MilvusStore()
 md_splitter = MarkdownHeaderTextSplitter(
     headers_to_split_on=[
         ("#", "h1"), 

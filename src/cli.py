@@ -1,9 +1,11 @@
 import asyncio
 from agent.graph import graph
 from agent.state import AgentState
+from db.vector.db import milvus_store
 
 async def main():
-
+    await milvus_store.get_store()
+    
     thread_id = "course-consultant-thread"
     config = {
         "configurable": {
@@ -12,13 +14,13 @@ async def main():
     }
 
     while True:
-        user_input = input("請輸入您的問題 (或輸入 'exit' 退出): ")
+        user_input = input("\n請輸入您的問題 (或輸入 'exit' 退出): ")
         if user_input.lower() == 'exit':
             break
 
         input_state = AgentState(question=user_input)
         result = await graph.ainvoke(input_state, config=config)
-        print("AI助手:", result["generation"])
+        print(f"\nAI助手: {result['generation']}\n")
 
 if __name__ == "__main__":
     asyncio.run(main())

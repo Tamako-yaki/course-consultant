@@ -1,7 +1,8 @@
+from dotenv import load_dotenv
+load_dotenv()
 import os
 from agent.graph import graph
 from fastapi import FastAPI, WebSocket
-
 from agent.state import AgentState
 
 HOST = os.getenv("HOST", "localhost")
@@ -30,7 +31,7 @@ async def chat(websocket: WebSocket):
         data = await websocket.receive_text()
         input_state = AgentState(question=data)
         result = await graph.ainvoke(input_state, config=config)
-        await websocket.send_text(f"AI助手: {result['generation']}")
+        await websocket.send_text(f"\nAI助手: {result['generation']}\n")
 
 if __name__ == "__main__":
     import uvicorn

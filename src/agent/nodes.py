@@ -1,16 +1,17 @@
+from dotenv import load_dotenv
+load_dotenv()
 import os
 import time
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage, AIMessage
-from db.vector.db import MilvusStore
+from db.vector.db import milvus_store
 from agent.prompts import GENERATE_PROMPT 
 from agent.state import AgentState
 from agent.configuration import Configuration
 
-milvus_store = MilvusStore()
 config = Configuration()
 
-if os.getenv("GEMINI_API_KEY") is None:
+if not os.getenv("GEMINI_API_KEY"):
     raise ValueError("GEMINI_API_KEY is not set.")
 
 async def retrieve(state: AgentState):
@@ -22,15 +23,22 @@ async def retrieve(state: AgentState):
     Return:
         state (dict): The current graph state with documents
     """
-    print("\n[RETRIEVE] 使用 MultiQueryRetriever 檢索...\n")
+    print("\n[RETRIEVE] 正在檢索相關文件...\n")
     question = state["question"]
     llm = ChatGoogleGenerativeAI(
         model=config.question_expand_model,
         temperature=0,
     )
-    retriever = await milvus_store.get_multi_query_retriever(llm)
+    retriever = await milvus_store.get_multi_query_rerank_retriever(llm, k=20) # 使用 MultiQueryRetriever 並搭配 CrossEncoderReranker 進行檢索
+    start_time = time.time()
     docs = await retriever.ainvoke(question)
-    print(f"檢索到 {len(docs)} 筆文件。")
+    end_time = time.time()
+    print(f"檢索到 {len(docs)} 筆相關文件。")
+    for i, doc in enumerate(docs):
+        print(f"\n[文件 {i}]")
+        print(doc.page_content)
+        print("-" * 20)
+    print(f"檢索花費 {end_time - start_time:.2f} 秒。")
     retrieved_docs = "\n\n".join([doc.page_content for doc in docs])
     return {"retrieved_docs": retrieved_docs}
 
