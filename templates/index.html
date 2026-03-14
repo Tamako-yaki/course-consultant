@@ -218,6 +218,8 @@
     </div>
 
     <script>
+        let conversationHistory = [];
+
         function updateStatus() {
             // Badges and stylistic warnings removed as per request
         }
@@ -234,11 +236,22 @@
                 const response = await fetch('/query', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ question: query, use_rag: useRag })
+                    body: JSON.stringify({ 
+                        question: query, 
+                        use_rag: useRag,
+                        history: conversationHistory
+                    })
                 });
                 const data = await response.json();
-                if (data.error) alert('Error: ' + data.error);
-                else displayResult(data);
+                if (data.error) {
+                    alert('Error: ' + data.error);
+                } else {
+                    // Save to history (hidden memory)
+                    conversationHistory.push({ role: 'user', content: query });
+                    conversationHistory.push({ role: 'assistant', content: data.answer });
+                    
+                    displayResult(data);
+                }
             } catch (err) {
                 alert('連線失敗');
             } finally {
@@ -253,12 +266,15 @@
             
             answerArea.innerHTML = data.answer.replace(/\n/g, '<br>');
             sourcesArea.innerHTML = '';
-            data.sources.forEach(source => {
-                const tag = document.createElement('span');
-                tag.className = 'source-tag';
-                tag.innerText = source;
-                sourcesArea.appendChild(tag);
-            });
+            
+            if (data.sources) {
+                data.sources.forEach(source => {
+                    const tag = document.createElement('span');
+                    tag.className = 'source-tag';
+                    tag.innerText = source;
+                    sourcesArea.appendChild(tag);
+                });
+            }
             resultsArea.style.display = 'block';
         }
     </script>

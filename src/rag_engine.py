@@ -44,6 +44,9 @@ class PureRAGEngine:
 4. **通識與職涯建議**: 若涉及課程與工作的關係，運用你的 general knowledge 提供建議。
 5. **出處**: 在回答結尾列出參考的資料來源。
 
+【對話歷史】:
+{chat_history}
+
 【參考資料】:
 {context}
 
@@ -58,6 +61,9 @@ class PureRAGEngine:
 你是一個校務諮詢助手。請直接根據你的內在知識回答問題。
 注意：不要參考任何外部搜尋結果或檢索到的文件。
 
+【對話歷史】:
+{chat_history}
+
 【問題】:
 {question}
 
@@ -68,17 +74,27 @@ class PureRAGEngine:
         """檢索相關文檔，增加 k 值以應對大量課程資料的干擾"""
         return self.vectorstore.similarity_search(query, k=k)
 
-    def generate(self, query: str, use_rag: bool = True) -> Dict[str, Any]:
-        """執行 RAG 或 幻覺模式流程"""
+    def generate(self, query: str, use_rag: bool = True, history: List[Dict] = None) -> Dict[str, Any]:
+        """執行 RAG 或 幻覺模式流程，支援上下文歷史"""
+        
+        # 格式化歷史紀錄
+        chat_history = ""
+        if history:
+            for msg in history:
+                role = "使用者" if msg.get("role") == "user" else "AI"
+                chat_history += f"{role}: {msg.get('content')}\n"
+        if not chat_history:
+            chat_history = "無"
+
         if use_rag:
             docs = self.retrieve(query)
             context = "\n\n".join([f"--- 來源: {doc.metadata.get('source')} ---\n{doc.page_content}" for doc in docs])
             chain = self.rag_prompt | self.llm
-            response = chain.invoke({"context": context, "question": query})
+            response = chain.invoke({"context": context, "question": query, "chat_history": chat_history})
             sources = list(set([doc.metadata.get('source') for doc in docs]))
         else:
             chain = self.hallucination_prompt | self.llm
-            response = chain.invoke({"question": query})
+            response = chain.invoke({"question": query, "chat_history": chat_history})
             context = "N/A (Hallucination mode active)"
             sources = ["Internal Weights (Hallucination)"]
 

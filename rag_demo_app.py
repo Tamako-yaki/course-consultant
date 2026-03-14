@@ -28,12 +28,13 @@ def query():
     data = request.json
     question = data.get('question')
     use_rag = data.get('use_rag', True) # Default to True
+    history = data.get('history', [])
     
     if not question:
         return jsonify({"error": "No question provided"}), 400
     
     try:
-        result = get_engine().generate(question, use_rag=use_rag)
+        result = get_engine().generate(question, use_rag=use_rag, history=history)
         return jsonify({
             "answer": result['answer'],
             "sources": result['sources']
