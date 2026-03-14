@@ -1,14 +1,14 @@
 from dotenv import load_dotenv
 load_dotenv()
 import os
-from agent.graph import graph
-from fastapi import FastAPI, WebSocket
-from agent.state import AgentState
+from agent.advanced_rag import AdvancedRAG, AgentState
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
 HOST = os.getenv("HOST", "localhost")
 PORT = int(os.getenv("PORT", 8000))
 
 app = FastAPI()
+agent = AdvancedRAG()
 
 @app.get("/")
 def read_root():
@@ -22,16 +22,19 @@ def health_check():
 async def chat(websocket: WebSocket):
     await websocket.accept()
     thread_id = "course-consultant-thread"
-    config = {
-        "configurable": {
-            "thread_id": thread_id
-        }
-    }
-    while True:
-        data = await websocket.receive_text()
-        input_state = AgentState(question=data)
-        result = await graph.ainvoke(input_state, config=config)
-        await websocket.send_text(f"\nAI助手: {result['generation']}\n")
+    try:
+        while True:
+            data = await websocket.receive_text()
+            print(f"[WS] 收到訊息: {data}")
+            
+            await websocket.send_text("\nAI助手: ")
+            async for chunk in agent.stream(user_message=data, session_id=thread_id):
+                await websocket.send_text(chunk)
+            await websocket.send_text("\n")
+    except WebSocketDisconnect:
+        print("[WS] 使用者中斷連線")
+    except Exception as e:
+        print(f"[WS] 錯誤: {e}")
 
 if __name__ == "__main__":
     import uvicorn

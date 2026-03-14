@@ -1,101 +1,90 @@
+import os
 from dotenv import load_dotenv
 load_dotenv()
-import os
-from langchain_milvus import Milvus, BM25BuiltInFunction
+
+os.environ["TRANSFORMERS_VERBOSITY"] = "error"
+os.environ["TQDM_DISABLE"] = "1"
+os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+
+from pymilvus import Collection, MilvusException, connections, db, utility
+from langchain_milvus import Milvus
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_classic.retrievers.multi_query import MultiQueryRetriever
-from langchain_community.cross_encoders import HuggingFaceCrossEncoder
-from langchain_classic.retrievers.document_compressors import CrossEncoderReranker
-from langchain_classic.retrievers import ContextualCompressionRetriever
-from langchain_core.documents import Document
+
+MILVUS_HOST    = os.getenv("MILVUS_HOST", "localhost")
+MILVUS_PORT    = os.getenv("MILVUS_PORT", "19530")
+MILVUS_DB_NAME = os.getenv("MILVUS_DB_NAME", "course_consultant")
+COLLECTION_NAME = os.getenv("MILVUS_COLLECTION_NAME", "ntut_knowledge_base")
+COLLECTION_DESCRIPTION = os.getenv("MILVUS_COLLECTION_DESCRIPTION", "無")
+
+_vector_store = None
 
 class MilvusStore:
-    """
-    Milvus 向量資料庫的封裝類別，提供連線、檢索和新增文件的功能。
-    """
-
+    
     def __init__(self):
-        self._milvus_store: Milvus | None = None
-        self.host = os.getenv("MILVUS_HOST", "localhost")
-        self.port = os.getenv("MILVUS_PORT", "19530")
-        self.collection_name = os.getenv("MILVUS_COLLECTION", "ntut_knowledge_base")
-        self.embedding_device = os.getenv("EMBEDDING_DEVICE", "cpu")
-        self.embedding_model = "BAAI/bge-small-zh"
-        self.reranking_model = "BAAI/bge-reranker-base"
+        self.store = self._get_vector_store()
+    
+    def _get_vector_store(self):
+        global _vector_store
 
-    async def _init_vector_store(self, drop_old: bool = False) -> Milvus:
-        print(f"正在連線至 Milvus (Host: {self.host}, Port: {self.port})...")
-        
-        embeddings = HuggingFaceEmbeddings(
-            model_name=self.embedding_model,
-            model_kwargs={"device": self.embedding_device},
-            show_progress=False
-        )
-
-        return Milvus(
-            embedding_function=embeddings,
-            # builtin_function=BM25BuiltInFunction(),
-            # vector_field=["dense", "sparse"],
-            connection_args={
-                "host": self.host,
-                "port": self.port,
-            },
-            collection_name=self.collection_name,
-            auto_id=True,
-            drop_old=drop_old,
-            enable_dynamic_field=True, # 啟用動態欄位，允許不同文件有不同的 metadata 結構
-        )
-
-    async def get_store(self, drop_old: bool = False) -> Milvus:
-        if self._milvus_store is None:
+        if _vector_store is None:
+            # 確保 database 存在
             try:
-                self._milvus_store = await self._init_vector_store(drop_old=drop_old)
-                print("Milvus 向量資料庫連線成功。")
-            except Exception as e:
-                print(f"連線 Milvus 失敗: {e}")
-                raise e
-        return self._milvus_store
+                connections.connect(host=MILVUS_HOST, port=MILVUS_PORT)
+                existing_databases = db.list_database()
 
-    async def get_base_retriever(
-        self, 
-        k: int = 50
-    ):
-        store = await self.get_store()
-        return store.as_retriever(
-            search_type="mmr",
-            search_kwargs={
-                "k": k, # 最後回傳 k 筆
-                "fetch_k": k * 5, # 先從 Milvus 撈 k * 5 筆候選
-                "lambda_mult": 0.7, # 0~1 之間，越小越注重相似度，越大越注重多樣性
-            },
-        )
+                if MILVUS_DB_NAME in existing_databases:
+                    print(f"[DB] '{MILVUS_DB_NAME}' 已存在。")
+                    db.using_database(MILVUS_DB_NAME)
+                    for collection_name in utility.list_collections():
+                        collection = Collection(name=collection_name)
+                        print(f"[DB] 集合名稱: {collection_name}")
+                        print(f"[DB] 集合描述: {collection.description}")
+                else:
+                    print(f"[DB] '{MILVUS_DB_NAME}' 不存在，正在建立...")
+                    db.create_database(MILVUS_DB_NAME)
+                    print(f"[DB] '{MILVUS_DB_NAME}' 建立成功。")
 
-    async def get_multi_query_retriever(self, llm, k: int = 50) -> MultiQueryRetriever:
-        base_retriever = await self.get_base_retriever(k=k)
-        return MultiQueryRetriever.from_llm(
-            retriever=base_retriever,
-            llm=llm,
-        )
+            except MilvusException as e:
+                print(f"[DB] 初始化失敗: {e}")
+                raise
 
-    async def get_multi_query_rerank_retriever(self, llm, k: int = 20) -> ContextualCompressionRetriever:
-        multi_query_retriever = await self.get_multi_query_retriever(llm, k*5)
+            # 確保 collection 已載入記憶體
+            if utility.has_collection(COLLECTION_NAME):
+                Collection(COLLECTION_NAME).load()
+                print(f"[DB] 集合 '{COLLECTION_NAME}' 已載入記憶體。")
+            else:
+                print(f"[DB] 集合 '{COLLECTION_NAME}' 不存在，請先建立集合。")
 
-        # 使用 CrossEncoder 進行重排序
-        model = HuggingFaceCrossEncoder(model_name=self.reranking_model)
-        compressor = CrossEncoderReranker(model=model, top_n=k)
+            # 建立 VectorStore
+            print(f"[DB] 正在建立 VectorStore 連線到 '{MILVUS_DB_NAME}' 資料庫...")
+            _vector_store = Milvus(
+                embedding_function=HuggingFaceEmbeddings(
+                    model_name="BAAI/bge-small-zh",
+                    model_kwargs={"device": os.getenv("EMBEDDING_DEVICE", "cpu")},
+                    show_progress=False,
+                ),
+                vector_field="dense",
+                index_params={
+                    "index_type": "IVF_FLAT",
+                    "metric_type": "COSINE",
+                    "params": {"nlist": 128},
+                },
+                search_params={
+                    "metric_type": "COSINE",
+                    "params": {"nprobe": 10},
+                },
+                connection_args={
+                    "host": MILVUS_HOST,
+                    "port": MILVUS_PORT,
+                    "db_name": MILVUS_DB_NAME,
+                },
+                collection_name=COLLECTION_NAME,
+                collection_description=COLLECTION_DESCRIPTION,
+                consistency_level="Strong",
+                auto_id=True,
+                drop_old=False,
+            )
+            print(f"[DB] VectorStore 連線建立完成，集合名稱: '{COLLECTION_NAME}'")
 
-        return ContextualCompressionRetriever(
-            base_retriever=multi_query_retriever,
-            base_compressor=compressor,
-        )
-
-    async def aadd_documents(self, documents: list[Document], drop_old: bool = False) -> None:
-        store = await self.get_store(drop_old=drop_old)
-        try:
-            await store.aadd_documents(documents)
-            print(f"成功新增 {len(documents)} 筆文件到 Milvus。")
-        except Exception as e:
-            print(f"新增文件到 Milvus 失敗: {e}")
-            raise e
-
-milvus_store = MilvusStore()
+        return _vector_store
+        

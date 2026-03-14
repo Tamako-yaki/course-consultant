@@ -1,9 +1,24 @@
+import os
+from dotenv import load_dotenv
+load_dotenv()
+
+os.environ["TRANSFORMERS_VERBOSITY"] = "error"
+os.environ["TQDM_DISABLE"] = "1"
+os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+
 from langchain_core.documents import Document
 from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter
-from db.vector.db import milvus_store
 from db.vector.load_course_json import load_main_courses, load_standard_courses, load_syllabus_dir
 from pathlib import Path
 import asyncio
+from langchain_milvus import Milvus
+from langchain_huggingface import HuggingFaceEmbeddings
+
+MILVUS_HOST    = os.getenv("MILVUS_HOST", "localhost")
+MILVUS_PORT    = os.getenv("MILVUS_PORT", "19530")
+MILVUS_DB_NAME = os.getenv("MILVUS_DB_NAME", "course_consultant")
+COLLECTION_NAME = os.getenv("MILVUS_COLLECTION_NAME", "ntut_knowledge_base")
+COLLECTION_DESCRIPTION = os.getenv("MILVUS_COLLECTION_DESCRIPTION", "無")
 
 md_splitter = MarkdownHeaderTextSplitter(
     headers_to_split_on=[
@@ -85,6 +100,35 @@ async def main():
     else:
         total_chunks = len(all_chunks)
         print(f"Total chunks to index: {total_chunks}")
+
+        vector_store = Milvus(
+            embedding_function=HuggingFaceEmbeddings(
+                model_name="BAAI/bge-small-zh",
+                model_kwargs={"device": os.getenv("EMBEDDING_DEVICE", "cpu")},
+                show_progress=False,
+            ),
+            vector_field="dense",
+            index_params={
+                "index_type": "IVF_FLAT",
+                "metric_type": "COSINE",
+                "params": {"nlist": 128},
+            },
+            search_params={
+                "metric_type": "COSINE",
+                "params": {"nprobe": 10},
+            },
+            connection_args={
+                "host": MILVUS_HOST,
+                "port": MILVUS_PORT,
+                "db_name": MILVUS_DB_NAME,
+            },
+            collection_name=COLLECTION_NAME,
+            collection_description=COLLECTION_DESCRIPTION,
+            consistency_level="Strong",
+            auto_id=True,
+            drop_old=True,
+            enable_dynamic_field=True # 允許不同文件有不同的 metadata
+        )
         print("Indexing documents to Milvus in batches...")
         
         batch_size = 500
@@ -97,8 +141,8 @@ async def main():
             
             # 第一批次時 drop_old=True，後續批次 drop_old=False
             is_first_batch = (i == 0)
-            await milvus_store.aadd_documents(batch, drop_old=is_first_batch)
-            
+            vector_store.add_documents(batch)
+
         print(f"Documents indexed successfully. ({total_chunks} chunks)")
 
 if __name__ == "__main__":

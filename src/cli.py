@@ -1,26 +1,16 @@
 import asyncio
-from agent.graph import graph
-from agent.state import AgentState
-from db.vector.db import milvus_store
+from RAG import AdvancedRAG
 
 async def main():
-    await milvus_store.get_store()
-    
-    thread_id = "course-consultant-thread"
-    config = {
-        "configurable": {
-            "thread_id": thread_id
-        }
-    }
-
+    rag = AdvancedRAG()
     while True:
-        user_input = input("\n請輸入您的問題 (或輸入 'exit' 退出): ")
-        if user_input.lower() == 'exit':
+        user_message = input("\n請輸入您的問題 (或輸入 'exit' 退出): ")
+        if user_message.lower() == "exit":
+            print("退出程式。")
             break
-
-        input_state = AgentState(question=user_input)
-        result = await graph.ainvoke(input_state, config=config)
-        print(f"\nAI助手: {result['generation']}\n")
+        async for chunk in rag.stream(user_message=user_message):
+            print(chunk, end="", flush=True)
+        print()
 
 if __name__ == "__main__":
     asyncio.run(main())
