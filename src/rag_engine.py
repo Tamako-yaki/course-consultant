@@ -155,7 +155,7 @@ class PureRAGEngine(BaseRAGEngine):
         self.llm = ChatGoogleGenerativeAI(
             model="gemini-3-flash-preview",
             temperature=0,
-            max_output_tokens=2048,
+            max_output_tokens=4096,
             google_api_key=api_key,
         )
 
