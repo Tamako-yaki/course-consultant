@@ -7,6 +7,8 @@ from langchain_core.documents import Document
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 
+from pipeline_utils import QueryExpander, DocumentReranker
+
 load_dotenv()
 os.environ["GOOGLE_API_KEY"] = os.getenv("API_KEY")
 
@@ -47,12 +49,50 @@ class BaseRAGEngine:
 你的回答:
 """)
 
-    def retrieve(self, query: str, k: int = 20) -> List[Document]:
-        return self.vectorstore.similarity_search(query, k=k)
+    def retrieve(self, query: str, k: int = 5, use_expansion: bool = True) -> List[Document]:
+        """
+        Enhanced retrieval with query expansion and reranking.
+
+        Process:
+        1. Expand query into 3 variants using QueryExpander
+        2. For each variant, retrieve top 10 chunks from vector store
+        3. Rerank all collected documents against original query
+        4. Return top-k documents after reranking
+
+        Args:
+            query: Original query string
+            k: Number of final documents to return (default: 5)
+            use_expansion: Whether to use query expansion (default: True)
+
+        Returns:
+            List of top-k documents sorted by relevance
+        """
+        if use_expansion:
+            try:
+                # Step 1: Expand query into 3 variants
+                queries = self.query_expander.expand_query(query)
+
+                # Step 2: Retrieve top 10 for each query variant
+                all_docs = []
+                for q in queries:
+                    docs = self.vectorstore.similarity_search(q, k=10)
+                    all_docs.extend(docs)
+
+                # Step 3: Rerank against original query
+                reranked_docs = self.document_reranker.rerank(query, all_docs, top_k=k)
+
+                return reranked_docs
+            except Exception as e:
+                # Fallback to simple retrieval if expansion/reranking fails
+                print(f"Enhanced retrieval failed: {e}. Falling back to simple retrieval.")
+                return self.vectorstore.similarity_search(query, k=k)
+        else:
+            # Simple similarity search (fallback)
+            return self.vectorstore.similarity_search(query, k=k)
 
     def generate(self, query: str, use_rag: bool = True, history: List[Dict] = None) -> Dict[str, Any]:
         if use_rag:
-            # RAG mode: include chat history
+            # RAG mode: include chat history, use enhanced retrieval
             chat_history = ""
             if history:
                 for msg in history:
@@ -61,7 +101,7 @@ class BaseRAGEngine:
             if not chat_history:
                 chat_history = "無"
 
-            docs = self.retrieve(query)
+            docs = self.retrieve(query, k=5, use_expansion=True)
             context = "\n\n".join(
                 [f"--- 來源: {doc.metadata.get('source')} ---\n{doc.page_content}" for doc in docs]
             )
@@ -118,6 +158,10 @@ class PureRAGEngine(BaseRAGEngine):
             max_output_tokens=2048,
             google_api_key=api_key,
         )
+
+        # Initialize query expansion and reranking components
+        self.query_expander = QueryExpander(api_key=api_key)
+        self.document_reranker = DocumentReranker(model_name="BAAI/bge-reranker-base")
 
 
 if __name__ == "__main__":

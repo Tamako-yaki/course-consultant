@@ -6,6 +6,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_ollama import OllamaEmbeddings
 
 from rag_engine import BaseRAGEngine
+from pipeline_utils import QueryExpander, DocumentReranker
 
 load_dotenv()
 os.environ["GOOGLE_API_KEY"] = os.getenv("API_KEY")
@@ -38,6 +39,10 @@ class PureRAGOllamaEmbeddingEngine(BaseRAGEngine):
             max_output_tokens=2048,
             google_api_key=api_key,
         )
+
+        # Initialize query expansion and reranking components
+        self.query_expander = QueryExpander(api_key=api_key)
+        self.document_reranker = DocumentReranker(model_name="BAAI/bge-reranker-base")
 
 
 if __name__ == "__main__":
