@@ -51,15 +51,16 @@ class BaseRAGEngine:
         return self.vectorstore.similarity_search(query, k=k)
 
     def generate(self, query: str, use_rag: bool = True, history: List[Dict] = None) -> Dict[str, Any]:
-        chat_history = ""
-        if history:
-            for msg in history:
-                role = "使用者" if msg.get("role") == "user" else "AI"
-                chat_history += f"{role}: {msg.get('content')}\n"
-        if not chat_history:
-            chat_history = "無"
-
         if use_rag:
+            # RAG mode: include chat history
+            chat_history = ""
+            if history:
+                for msg in history:
+                    role = "使用者" if msg.get("role") == "user" else "AI"
+                    chat_history += f"{role}: {msg.get('content')}\n"
+            if not chat_history:
+                chat_history = "無"
+
             docs = self.retrieve(query)
             context = "\n\n".join(
                 [f"--- 來源: {doc.metadata.get('source')} ---\n{doc.page_content}" for doc in docs]
@@ -68,8 +69,9 @@ class BaseRAGEngine:
             response = chain.invoke({"context": context, "question": query, "chat_history": chat_history})
             sources = list(set([doc.metadata.get("source") for doc in docs]))
         else:
+            # No-RAG mode: one-shot, no history
             chain = self.no_rag | self.llm
-            response = chain.invoke({"question": query, "chat_history": chat_history})
+            response = chain.invoke({"question": query, "chat_history": ""})
             sources = ["Internal Weights"]
 
         return {
