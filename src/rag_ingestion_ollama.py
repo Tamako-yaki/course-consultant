@@ -20,7 +20,7 @@ DATA_DIR = os.path.join(os.path.dirname(__file__), "../data")
 JSON_PATH = os.path.join(DATA_DIR, "114/standard.json")
 ADMIN_DATA_DIR = os.path.join(DATA_DIR, "行政資料")
 INDEX_SAVE_PATH = os.path.join(DATA_DIR, "faiss_index/pure_rag_ollama")
-OLLAMA_EMBEDDING_MODEL = "nomic-embed-text"
+OLLAMA_EMBEDDING_MODEL = "nomic-embed-text-v2-moe"
 
 
 def load_standard_json(file_path: str) -> List[Document]:

@@ -1,40 +1,48 @@
 import os
-from typing import List, Dict, Any
+from typing import Any, Dict, List
+
 from dotenv import load_dotenv
 from langchain_community.vectorstores import FAISS
-from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
-from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.documents import Document
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_ollama import OllamaEmbeddings
 
-# 讀取環境變數
+
 load_dotenv()
 os.environ["GOOGLE_API_KEY"] = os.getenv("API_KEY")
 
-class PureRAGEngine:
+OLLAMA_EMBEDDING_MODEL = "nomic-embed-text-v2-moe"
+
+
+class PureRAGOllamaEmbeddingEngine:
     def __init__(self, index_path: str = None):
         if index_path is None:
-            # Use relative path if not provided
-            index_path = os.path.join(os.path.dirname(__file__), "../data/faiss_index/pure_rag")
-            
+            index_path = os.path.join(os.path.dirname(__file__), "../data/faiss_index/pure_rag_ollama")
+
+        ollama_base_url = os.getenv("OLLAMA_BASE_URL")
+        if not ollama_base_url:
+            raise ValueError("Missing OLLAMA_BASE_URL. Set it in your .env file.")
+
         api_key = os.getenv("API_KEY")
-        self.embeddings = GoogleGenerativeAIEmbeddings(
-            model="models/gemini-embedding-2-preview",
-            google_api_key=api_key
+        self.embeddings = OllamaEmbeddings(
+            model=OLLAMA_EMBEDDING_MODEL,
+            base_url=ollama_base_url,
         )
         self.vectorstore = FAISS.load_local(
-            index_path, 
-            self.embeddings, 
-            allow_dangerous_deserialization=True
+            index_path,
+            self.embeddings,
+            allow_dangerous_deserialization=True,
         )
         self.llm = ChatGoogleGenerativeAI(
-            model="gemini-3-flash-preview", 
+            model="gemini-3-flash-preview",
             temperature=0,
             max_output_tokens=2048,
-            google_api_key=api_key
+            google_api_key=api_key,
         )
-        
-        # RAG 模式的 Prompt
-        self.rag_prompt = ChatPromptTemplate.from_template("""
+
+        self.rag_prompt = ChatPromptTemplate.from_template(
+            """
 你是一個專業的校務諮詢助手。請根據以下【參考資料】回答使用者的【問題】。
 
 【回覆準則】:
@@ -54,10 +62,11 @@ class PureRAGEngine:
 {question}
 
 你的回答:
-""")
+"""
+        )
 
-        # 幻覺模式 (純 LLM) 的 Prompt
-        self.hallucination_prompt = ChatPromptTemplate.from_template("""
+        self.hallucination_prompt = ChatPromptTemplate.from_template(
+            """
 你是一個校務諮詢助手。請直接根據你的內在知識回答問題。
 注意：不要參考任何外部搜尋結果或檢索到的文件。
 
@@ -68,16 +77,13 @@ class PureRAGEngine:
 {question}
 
 你的回答:
-""")
+"""
+        )
 
     def retrieve(self, query: str, k: int = 20) -> List[Document]:
-        """檢索相關文檔，增加 k 值以應對大量課程資料的干擾"""
         return self.vectorstore.similarity_search(query, k=k)
 
     def generate(self, query: str, use_rag: bool = True, history: List[Dict] = None) -> Dict[str, Any]:
-        """執行 RAG 或 幻覺模式流程，支援上下文歷史"""
-        
-        # 格式化歷史紀錄
         chat_history = ""
         if history:
             for msg in history:
@@ -88,19 +94,20 @@ class PureRAGEngine:
 
         if use_rag:
             docs = self.retrieve(query)
-            context = "\n\n".join([f"--- 來源: {doc.metadata.get('source')} ---\n{doc.page_content}" for doc in docs])
+            context = "\n\n".join(
+                [f"--- 來源: {doc.metadata.get('source')} ---\n{doc.page_content}" for doc in docs]
+            )
             chain = self.rag_prompt | self.llm
             response = chain.invoke({"context": context, "question": query, "chat_history": chat_history})
-            sources = list(set([doc.metadata.get('source') for doc in docs]))
+            sources = list(set([doc.metadata.get("source") for doc in docs]))
         else:
             chain = self.hallucination_prompt | self.llm
             response = chain.invoke({"question": query, "chat_history": chat_history})
-            context = "N/A (Hallucination mode active)"
             sources = ["Internal Weights (Hallucination)"]
 
         return {
             "answer": self._to_text(response.content),
-            "sources": sources
+            "sources": sources,
         }
 
     @staticmethod
@@ -120,9 +127,8 @@ class PureRAGEngine:
                 return "\n".join(parts)
         return str(content)
 
+
 if __name__ == "__main__":
-    engine = PureRAGEngine()
-    print("Testing RAG mode...")
-    print(engine.generate("對 LLM 有興趣可以上什麼課？", use_rag=True)['answer'])
-    print("\nTesting Hallucination mode...")
-    print(engine.generate("對 LLM 有興趣可以上什麼課？", use_rag=False)['answer'])
+    engine = PureRAGOllamaEmbeddingEngine()
+    print("Testing RAG mode (Ollama embeddings + Gemini generation)...")
+    print(engine.generate("對 LLM 有興趣可以上什麼課？", use_rag=True)["answer"])

@@ -26,6 +26,7 @@ cp .env.example .env
 ```env
 API_KEY=your_google_ai_api_key
 OLLAMA_BASE_URL=http://localhost:11434
+RAG_ENGINE=google
 ```
 
 4. 建立向量索引（首次或資料更新後）
@@ -53,7 +54,7 @@ python server/webhook_server.py
 1. 啟動 Ollama 服務並拉取 embedding 模型
 
 ```bash
-ollama pull nomic-embed-text
+ollama pull nomic-embed-text-v2-moe
 ```
 
 2. 在 `.env` 中設定 Ollama 服務位置（`OLLAMA_BASE_URL`）
@@ -65,7 +66,19 @@ python src/rag_ingestion_ollama.py
 ```
 
 預設會輸出到 `data/faiss_index/pure_rag_ollama`。
-此腳本的 embedding 模型固定為 `nomic-embed-text`。
+此腳本的 embedding 模型固定為 `nomic-embed-text-v2-moe`。
+
+## 引擎切換（Google Embedding / Ollama Embedding）
+
+Web UI 會依照 `.env` 的 `RAG_ENGINE` 載入不同引擎：
+
+- `RAG_ENGINE=google`: 使用 `src/rag_engine.py`（Google embedding + Gemini）
+- `RAG_ENGINE=ollama`: 使用 `src/rag_engine_ollama.py`（Ollama embedding + Gemini）
+
+切到 Ollama embedding 時，請確認：
+
+1. `OLLAMA_BASE_URL` 已正確設定
+2. 已先執行 `python src/rag_ingestion_ollama.py` 建立索引
 
 ## 目前分支的服務模式
 
