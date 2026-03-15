@@ -57,7 +57,11 @@ def query():
 def query_stream():
     data = request.json
     question = data.get('question')
-    use_rag = data.get('use_rag', True)
+    mode = data.get('mode')
+    # Backward compat: if mode not provided, derive from use_rag
+    if mode is None:
+        use_rag = data.get('use_rag', True)
+        mode = "our_rag" if use_rag else "no_rag"
     history = data.get('history', [])
 
     if not question:
@@ -65,7 +69,7 @@ def query_stream():
 
     def event_stream():
         try:
-            for event in get_engine().generate_stream(question, use_rag=use_rag, history=history):
+            for event in get_engine().generate_stream(question, history=history, mode=mode):
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
         except Exception as e:
             yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"

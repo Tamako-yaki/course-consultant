@@ -55,68 +55,46 @@
             letter-spacing: -1px;
         }
 
-        /* Toggle Switch Style */
+        /* Mode Tabs */
         .controls {
             display: flex;
             justify-content: center;
             align-items: center;
-            gap: 1rem;
             margin-bottom: 2rem;
             animation: fadeIn 1s ease;
         }
 
-        .toggle-container {
+        .mode-tabs {
             display: flex;
-            align-items: center;
             background: var(--card-bg);
-            padding: 0.5rem 1.2rem;
-            border-radius: 50px;
             border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 50px;
+            padding: 0.35rem;
             backdrop-filter: blur(10px);
+            gap: 0.25rem;
         }
 
-        .switch {
-            position: relative;
-            display: inline-block;
-            width: 50px;
-            height: 26px;
-            margin: 0 10px;
-        }
-
-        .switch input { opacity: 0; width: 0; height: 0; }
-
-        .slider {
-            position: absolute;
+        .tab-btn {
+            background: transparent;
+            border: none;
+            color: #94a3b8;
+            padding: 0.5rem 1.4rem;
+            border-radius: 40px;
+            font-size: 0.9rem;
+            font-weight: 600;
             cursor: pointer;
-            top: 0; left: 0; right: 0; bottom: 0;
-            background-color: #334155;
-            transition: .4s;
-            border-radius: 34px;
+            transition: all 0.25s ease;
+            letter-spacing: 0.3px;
+            white-space: nowrap;
         }
 
-        .slider:before {
-            position: absolute;
-            content: "";
-            height: 18px; width: 18px;
-            left: 4px; bottom: 4px;
-            background-color: white;
-            transition: .4s;
-            border-radius: 50%;
-        }
+        .tab-btn:hover { color: #e2e8f0; }
 
-        input:checked + .slider { background-color: var(--primary); }
-        input:checked + .slider:before { transform: translateX(24px); }
-
-        .toggle-label { font-weight: 600; font-size: 0.9rem; text-transform: uppercase; letter-spacing: 1px; }
-        .status-badge {
-            font-size: 0.8rem;
-            padding: 0.2rem 0.8rem;
-            border-radius: 12px;
-            font-weight: 700;
-            transition: all 0.3s;
+        .tab-btn.active {
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            color: white;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.3);
         }
-        .status-rag { background: rgba(99, 102, 241, 0.2); color: #818cf8; }
-        .status-hal { background: rgba(239, 68, 68, 0.2); color: #f87171; display: none; }
 
         .search-wrapper {
             position: relative;
@@ -286,7 +264,7 @@
             display: flex; align-items: center; justify-content: center;
         }
         .step-icon.running {
-            border: 2px solid rgba(99, 102, 241, 0.3);
+            border: 2px solid rgba(255, 255, 255, 0.1);
             border-top-color: var(--primary);
             border-radius: 50%;
             animation: spin 0.7s linear infinite;
@@ -311,13 +289,9 @@
         </header>
 
         <div class="controls">
-            <div class="toggle-container">
-                <span class="toggle-label">一般模式</span>
-                <label class="switch">
-                    <input type="checkbox" id="ragToggle" checked onchange="updateStatus()">
-                    <span class="slider"></span>
-                </label>
-                <span class="toggle-label">我們的選課顧問</span>
+            <div class="mode-tabs">
+                <button class="tab-btn" data-tab="no_rag" onclick="setMode('no_rag')">一般模式</button>
+                <button class="tab-btn active" data-tab="our_rag" onclick="setMode('our_rag')">我們的系統</button>
             </div>
         </div>
 
@@ -340,22 +314,37 @@
     <script>
         let conversationHistory = [];
         let currentAbortController = null;
+        let currentMode = 'our_rag';
 
-        document.addEventListener('DOMContentLoaded', function () { updateStatus(); });
+        const MODE_DATA_ATTR = {
+            'no_rag': 'no-rag',
+            'our_rag': 'our-rag',
+        };
 
-        function updateStatus() {
-            const useRag = document.getElementById('ragToggle').checked;
-            document.documentElement.setAttribute('data-mode', useRag ? 'rag' : 'no-rag');
+        const MODE_STEPS = {
+            'no_rag': ['llm'],
+            'our_rag': ['expand', 'retrieve', 'rerank', 'llm'],
+        };
+
+        document.addEventListener('DOMContentLoaded', function () { setMode('our_rag'); });
+
+        function setMode(mode) {
+            currentMode = mode;
+            document.documentElement.setAttribute('data-mode', MODE_DATA_ATTR[mode]);
+            document.querySelectorAll('.tab-btn').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.tab === mode);
+            });
+            if (mode === 'no_rag') conversationHistory = [];
         }
 
         const STEP_DEFS = {
             expand: '重寫查詢', retrieve: '向量檢索', rerank: '重新排序', llm: 'LLM 思考中',
         };
 
-        function initPipelinePanel(useRag) {
+        function initPipelinePanel(mode) {
             const panel = document.getElementById('pipelinePanel');
             panel.innerHTML = '';
-            const steps = useRag ? ['expand', 'retrieve', 'rerank', 'llm'] : ['llm'];
+            const steps = MODE_STEPS[mode] || ['llm'];
             steps.forEach(stepId => {
                 const el = document.createElement('div');
                 el.className = 'pipeline-step';
@@ -393,7 +382,6 @@
 
         async function submitQuery() {
             const query = document.getElementById('queryInput').value.trim();
-            const useRag = document.getElementById('ragToggle').checked;
             if (!query) return;
 
             if (currentAbortController) currentAbortController.abort();
@@ -406,12 +394,12 @@
                 const response = await fetch('/query/stream', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ question: query, use_rag: useRag, history: conversationHistory }),
+                    body: JSON.stringify({ question: query, mode: currentMode, history: conversationHistory }),
                     signal: currentAbortController.signal
                 });
 
                 document.getElementById('loader').style.display = 'none';
-                initPipelinePanel(useRag);
+                initPipelinePanel(currentMode);
 
                 const reader = response.body.getReader();
                 const decoder = new TextDecoder();
@@ -429,8 +417,10 @@
                         let event;
                         try { event = JSON.parse(trimmed.slice(6)); } catch { continue; }
                         if (event.type === 'result') {
-                            conversationHistory.push({ role: 'user', content: query });
-                            conversationHistory.push({ role: 'assistant', content: event.answer });
+                            if (currentMode !== 'no_rag') {
+                                conversationHistory.push({ role: 'user', content: query });
+                                conversationHistory.push({ role: 'assistant', content: event.answer });
+                            }
                             displayResult(event);
                         } else if (event.type === 'error') {
                             alert('Error: ' + event.error);

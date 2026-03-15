@@ -5,6 +5,7 @@ Includes query expansion and document reranking.
 """
 
 import re
+import json
 from typing import List
 from langchain_core.documents import Document
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -13,17 +14,17 @@ from langchain_core.prompts import PromptTemplate
 
 class QueryExpander:
     """
-    Expand a query into hypothetical answer passages (HyDE) personalized with
+    Expand a query into multiple paraphrased variants personalized with
     student context extracted from the conversation history.
     """
 
-    def __init__(self, api_key: str = None, model: str = "gemini-2.5-flash-lite"):
+    def __init__(self, api_key: str = None, model: str = "gemini-3.1-flash-lite-preview"):
         """
         Initialize QueryExpander with Gemini API.
 
         Args:
             api_key: Google API key for Gemini
-            model: Model name to use (default: gemini-2.5-flash-lite)
+            model: Model name to use (default: gemini-3.1-flash-lite-preview)
         """
         self.llm = ChatGoogleGenerativeAI(
             model=model,
@@ -32,38 +33,38 @@ class QueryExpander:
             google_api_key=api_key,
         )
 
-        # Prompt: extract student context, then produce 3 HyDE document-chunk passages
+        # Prompt: extract student context, then produce 3 paraphrased question variants
         self.prompt = PromptTemplate(
             input_variables=["query", "chat_history"],
-            template="""You are a retrieval assistant for a university course consultation system. The vector store contains policy documents, course catalogs, and academic regulations.
+            template="""You are a retrieval assistant for a university course consultation system.
 
-Internally (do not output this): note any student personal details from the conversation history (major, year, interests, GPA, etc.) and use them to make the passages more targeted.
+From the conversation history, silently note any student personal details (major, year, interests, GPA, etc.) and use them to make the paraphrases more specific and relevant to that student.
 
-Your ONLY output must be exactly 3 short passages that look like raw text chunks that would exist in the vector store and directly contain the answer to the student's query. Each passage should be 1–3 sentences, dense and factual, like a copied excerpt from a university regulation or course catalog — NOT a fluent answer, NOT a rephrased question, NO step labels, NO explanations.
+Your ONLY output must be exactly 3 alternative phrasings of the student's query. Each rephrasing should:
+- Be a natural question or search phrase (NOT a document excerpt or answer)
+- Incorporate relevant student details from history when helpful
+- Approach the same information need from a slightly different angle
 
-Good examples:
-- 英語畢業門檻：大學部學生須於畢業前達到 CEFR B2 等級，或通過校定英語能力鑑定考試。
-- Scholarship eligibility: Full-time students maintaining a GPA above 3.5 with no failing grades in the preceding semester.
-- 選課規定：大三以上學生每學期最多可修 25 學分，需經指導教授簽核。
+Output only the 3 rephrasings, one per line, nothing else.
 
 Conversation History:
 {chat_history}
 
 Student Query: {query}
 
-Output (3 passages, one per line, nothing else):""",
+Output (3 rephrasings, one per line):""",
         )
 
     def expand_query(self, query: str, chat_history: str = "") -> List[str]:
         """
-        Expand a query into 4 variants: original + 3 HyDE passages.
+        Expand a query into 4 variants: original + 3 paraphrased versions.
 
         Args:
             query: Original query string
             chat_history: Formatted conversation history string
 
         Returns:
-            List of 4 items: [original_query, passage_1, passage_2, passage_3]
+            List of 4 items: [original_query, rephrasing_1, rephrasing_2, rephrasing_3]
         """
         try:
             chain = self.prompt | self.llm
@@ -82,59 +83,61 @@ Output (3 passages, one per line, nothing else):""",
 
 
 class DocumentReranker:
-    """Rerank documents using BGE reranker model from HuggingFace."""
+    """Rerank documents using Gemini LLM for listwise semantic relevance scoring."""
 
-    def __init__(self, model_name: str = "BAAI/bge-reranker-base"):
-        """
-        Initialize DocumentReranker.
+    def __init__(self, api_key: str = None, model: str = "gemini-3.1-flash-lite-preview"):
+        self.llm = ChatGoogleGenerativeAI(
+            model=model,
+            temperature=0,
+            max_output_tokens=200,
+            google_api_key=api_key,
+        )
+        self.prompt = PromptTemplate(
+            input_variables=["query", "documents", "top_k"],
+            template="""You are a document relevance ranker for a university course consultation system.
 
-        Args:
-            model_name: HuggingFace model name for reranker (default: BAAI/bge-reranker-base)
-        """
-        try:
-            from sentence_transformers import CrossEncoder
+Given the student query and numbered document chunks below, return the indices of the {top_k} most relevant chunks, ordered from most to least relevant.
 
-            self.reranker = CrossEncoder(model_name)
-        except ImportError:
-            raise ImportError(
-                "sentence-transformers is required for reranking. "
-                "Install it with: pip install sentence-transformers"
-            )
-        except Exception as e:
-            print(f"Failed to load reranker model {model_name}: {e}")
-            raise
+Student Query: {query}
 
-    def rerank(
-        self, query: str, documents: List[Document], top_k: int = 5
-    ) -> List[Document]:
-        """
-        Rerank documents by relevance to the query.
+Documents:
+{documents}
 
-        Args:
-            query: Original query string
-            documents: List of Document objects to rerank
-            top_k: Number of top documents to return (default: 5)
+Output only a JSON array of {top_k} integer indices (most relevant first). Example: [2, 0, 5, 1, 3]
+Output:""",
+        )
 
-        Returns:
-            List of top-k documents sorted by relevance score (highest first)
-        """
+    def rerank(self, query: str, documents: List[Document], top_k: int = 5) -> List[Document]:
         if not documents:
             return []
 
-        # Extract document texts
-        doc_texts = [doc.page_content for doc in documents]
+        # Deduplicate by page_content (4 query variants × 10 docs = many duplicates)
+        seen: set = set()
+        unique_docs: List[Document] = []
+        for doc in documents:
+            if doc.page_content not in seen:
+                seen.add(doc.page_content)
+                unique_docs.append(doc)
 
-        # Create pairs of (query, document) for scoring
-        pairs = [[query, text] for text in doc_texts]
+        candidates = unique_docs[:20]  # Cap at 20 to keep prompt size reasonable
 
-        # Get relevance scores
-        scores = self.reranker.predict(pairs)
+        if len(candidates) <= top_k:
+            return candidates
 
-        # Create list of (document, score) tuples
-        doc_score_pairs = list(zip(documents, scores))
+        doc_text = "\n\n".join(
+            f"[{i}] {doc.page_content[:400]}" for i, doc in enumerate(candidates)
+        )
 
-        # Sort by score descending
-        doc_score_pairs.sort(key=lambda x: x[1], reverse=True)
+        try:
+            chain = self.prompt | self.llm
+            response = chain.invoke({"query": query, "documents": doc_text, "top_k": top_k})
+            match = re.search(r'\[[\d,\s]+\]', response.content.strip())
+            if match:
+                indices = json.loads(match.group())
+                ranked = [candidates[i] for i in indices if 0 <= i < len(candidates)]
+                if ranked:
+                    return ranked[:top_k]
+        except Exception as e:
+            print(f"LLM reranking failed: {e}. Falling back to original order.")
 
-        # Return top-k documents (without scores)
-        return [doc for doc, score in doc_score_pairs[:top_k]]
+        return candidates[:top_k]

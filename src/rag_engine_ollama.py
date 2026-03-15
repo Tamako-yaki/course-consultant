@@ -42,7 +42,7 @@ class PureRAGOllamaEmbeddingEngine(BaseRAGEngine):
 
         # Initialize query expansion and reranking components
         self.query_expander = QueryExpander(api_key=api_key)
-        self.document_reranker = DocumentReranker(model_name="BAAI/bge-reranker-base")
+        self.document_reranker = DocumentReranker(api_key=api_key)
 
 
 if __name__ == "__main__":

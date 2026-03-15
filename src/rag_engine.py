@@ -120,9 +120,16 @@ class BaseRAGEngine:
             "sources": sources,
         }
 
-    def generate_stream(self, query: str, use_rag: bool = True, history: List[Dict] = None):
-        """Generator yielding SSE event dicts for verbose pipeline display."""
-        if use_rag:
+    def generate_stream(self, query: str, use_rag: bool = True, history: List[Dict] = None, mode: str = None):
+        """Generator yielding SSE event dicts for verbose pipeline display.
+
+        mode: "no_rag" | "traditional_rag" | "our_rag"
+        Falls back to use_rag if mode is not provided.
+        """
+        if mode is None:
+            mode = "our_rag" if use_rag else "no_rag"
+
+        if mode == "our_rag":
             chat_history = ""
             if history:
                 for msg in history:
@@ -164,7 +171,30 @@ class BaseRAGEngine:
             sources = list(set([doc.metadata.get("source") for doc in reranked]))
             yield {"type": "result", "answer": self._to_text(response.content), "sources": sources}
 
-        else:
+        elif mode == "traditional_rag":
+            chat_history = ""
+            if history:
+                for msg in history:
+                    role = "使用者" if msg.get("role") == "user" else "AI"
+                    chat_history += f"{role}: {msg.get('content')}\n"
+            if not chat_history:
+                chat_history = "無"
+
+            yield {"step": "retrieve", "status": "running", "label": "向量檢索", "data": None}
+            docs = self.vectorstore.similarity_search(query, k=5)
+            yield {"step": "retrieve", "status": "done", "label": "向量檢索",
+                   "data": {"doc_count": len(docs)}}
+
+            yield {"step": "llm", "status": "running", "label": "LLM 思考中", "data": None}
+            context = "\n\n".join(
+                [f"--- 來源: {doc.metadata.get('source')} ---\n{doc.page_content}" for doc in docs]
+            )
+            chain = self.rag_prompt | self.llm
+            response = chain.invoke({"context": context, "question": query, "chat_history": chat_history})
+            sources = list(set([doc.metadata.get("source") for doc in docs]))
+            yield {"type": "result", "answer": self._to_text(response.content), "sources": sources}
+
+        else:  # no_rag
             yield {"step": "llm", "status": "running", "label": "LLM 思考中", "data": None}
             chain = self.no_rag | self.llm
             response = chain.invoke({"question": query, "chat_history": ""})
@@ -212,7 +242,7 @@ class PureRAGEngine(BaseRAGEngine):
 
         # Initialize query expansion and reranking components
         self.query_expander = QueryExpander(api_key=api_key)
-        self.document_reranker = DocumentReranker(model_name="BAAI/bge-reranker-base")
+        self.document_reranker = DocumentReranker(api_key=api_key)
 
 
 if __name__ == "__main__":
