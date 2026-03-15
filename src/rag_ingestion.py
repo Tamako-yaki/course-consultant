@@ -8,20 +8,20 @@ from langchain_community.vectorstores import FAISS
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-from loaders import load_admin_data, load_standard_json
+from loaders import load_admin_data, load_preprocessed_courses
 
 load_dotenv()
 os.environ["GOOGLE_API_KEY"] = os.getenv("API_KEY")
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "../data")
-JSON_PATH = os.path.join(DATA_DIR, "114/standard.json")
+PROCESSED_DIR = os.path.join(DATA_DIR, "processed")
 ADMIN_DATA_DIR = os.path.join(DATA_DIR, "行政資料")
 INDEX_SAVE_PATH = os.path.join(DATA_DIR, "faiss_index/pure_rag")
 
 
 def main():
     admin_docs = load_admin_data(ADMIN_DATA_DIR)
-    course_docs = load_standard_json(JSON_PATH)
+    course_docs = load_preprocessed_courses(PROCESSED_DIR)
 
     docs = admin_docs + course_docs
     print(f"Total documents: {len(docs)} (Admin: {len(admin_docs)}, Course: {len(course_docs)})")
