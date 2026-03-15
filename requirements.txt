@@ -2,5 +2,6 @@ flask
 langchain
 langchain-google-genai
 langchain-community
+langchain-text-splitters
 faiss-cpu
 python-dotenv
