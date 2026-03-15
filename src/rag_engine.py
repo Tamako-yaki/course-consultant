@@ -34,7 +34,7 @@ class BaseRAGEngine:
 你的回答:
 """)
 
-    hallucination_prompt = ChatPromptTemplate.from_template("""
+    no_rag = ChatPromptTemplate.from_template("""
 你是一個校務諮詢助手。請直接根據你的內在知識回答問題。
 注意：不要參考任何外部搜尋結果或檢索到的文件。
 
@@ -68,9 +68,9 @@ class BaseRAGEngine:
             response = chain.invoke({"context": context, "question": query, "chat_history": chat_history})
             sources = list(set([doc.metadata.get("source") for doc in docs]))
         else:
-            chain = self.hallucination_prompt | self.llm
+            chain = self.no_rag | self.llm
             response = chain.invoke({"question": query, "chat_history": chat_history})
-            sources = ["Internal Weights (Hallucination)"]
+            sources = ["Internal Weights"]
 
         return {
             "answer": self._to_text(response.content),
@@ -122,5 +122,5 @@ if __name__ == "__main__":
     engine = PureRAGEngine()
     print("Testing RAG mode...")
     print(engine.generate("對 LLM 有興趣可以上什麼課？", use_rag=True)["answer"])
-    print("\nTesting Hallucination mode...")
+    print("\nTesting No-RAG mode...")
     print(engine.generate("對 LLM 有興趣可以上什麼課？", use_rag=False)["answer"])
