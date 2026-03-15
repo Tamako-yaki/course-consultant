@@ -296,7 +296,7 @@
         </div>
 
         <div class="search-wrapper">
-            <input type="text" id="queryInput" placeholder="詢問 114 年課程、大綱或職涯建議..." onkeypress="if(event.key==='Enter')submitQuery()">
+            <input type="text" id="queryInput" placeholder="詢問 課程大綱、法規辦法或職涯建議..." onkeypress="if(event.key==='Enter')submitQuery()">
             <button class="search-btn" onclick="submitQuery()">查詢</button>
         </div>
 
@@ -371,7 +371,7 @@
                 icon.className = 'step-icon done';
                 icon.textContent = '✓';
                 if (event.step === 'expand' && event.data?.variants) {
-                    detail.innerHTML = event.data.variants.map(v => `<span class="query-pill">${v}</span>`).join('');
+                    detail.innerHTML = event.data.variants.slice(1).map(v => `<span class="query-pill">${v}</span>`).join('');
                 } else if (event.step === 'retrieve' && event.data) {
                     detail.textContent = `${event.data.doc_count} 個文件片段`;
                 } else if (event.step === 'rerank' && event.data) {

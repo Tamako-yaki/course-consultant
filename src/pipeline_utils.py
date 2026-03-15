@@ -18,6 +18,19 @@ class QueryExpander:
     student context extracted from the conversation history.
     """
 
+    @staticmethod
+    def _content_to_str(content) -> str:
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts = []
+            for item in content:
+                text = item.get("text") if isinstance(item, dict) else getattr(item, "text", None)
+                if text:
+                    parts.append(str(text))
+            return "\n".join(parts)
+        return str(content)
+
     def __init__(self, api_key: str = None, model: str = "gemini-3.1-flash-lite-preview"):
         """
         Initialize QueryExpander with Gemini API.
@@ -69,13 +82,26 @@ Output (3 rephrasings, one per line):""",
         try:
             chain = self.prompt | self.llm
             response = chain.invoke({"query": query, "chat_history": chat_history or "無"})
-            response_text = response.content.strip()
+            response_text = self._content_to_str(response.content).strip()
 
-            # Each non-empty line is one passage
-            passages = [line.strip() for line in response_text.split("\n") if line.strip()]
+            # Strip numbered/bulleted prefixes like "1.", "2.", "-", "*"
+            cleaned = []
+            for line in response_text.split("\n"):
+                line = line.strip()
+                if not line:
+                    continue
+                line = re.sub(r'^[\d]+[.)]\s*', '', line)
+                line = re.sub(r'^[-*•]\s*', '', line).strip()
+                if line:
+                    cleaned.append(line)
 
-            result = [query] + passages[:3]
-            return result if len(result) == 4 else [query, query, query, query]
+            passages = cleaned[:3]
+            if len(passages) < 1:
+                return [query, query, query, query]
+            # Pad with original if fewer than 3 paraphrases were returned
+            while len(passages) < 3:
+                passages.append(query)
+            return [query] + passages
 
         except Exception as e:
             print(f"Query expansion failed: {e}. Using original query.")
@@ -131,7 +157,13 @@ Output:""",
         try:
             chain = self.prompt | self.llm
             response = chain.invoke({"query": query, "documents": doc_text, "top_k": top_k})
-            match = re.search(r'\[[\d,\s]+\]', response.content.strip())
+            raw = response.content if isinstance(response.content, str) else (
+                "\n".join(
+                    (item.get("text") if isinstance(item, dict) else getattr(item, "text", "")) or ""
+                    for item in response.content
+                ) if isinstance(response.content, list) else str(response.content)
+            )
+            match = re.search(r'\[[\d,\s]+\]', raw.strip())
             if match:
                 indices = json.loads(match.group())
                 ranked = [candidates[i] for i in indices if 0 <= i < len(candidates)]
