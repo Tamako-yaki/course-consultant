@@ -49,12 +49,12 @@ class BaseRAGEngine:
 你的回答:
 """)
 
-    def retrieve(self, query: str, k: int = 5, use_expansion: bool = True) -> List[Document]:
+    def retrieve(self, query: str, k: int = 5, use_expansion: bool = True, chat_history: str = "") -> List[Document]:
         """
         Enhanced retrieval with query expansion and reranking.
 
         Process:
-        1. Expand query into 3 variants using QueryExpander
+        1. Expand query into 4 variants (original + 3 HyDE passages) using QueryExpander
         2. For each variant, retrieve top 10 chunks from vector store
         3. Rerank all collected documents against original query
         4. Return top-k documents after reranking
@@ -63,14 +63,15 @@ class BaseRAGEngine:
             query: Original query string
             k: Number of final documents to return (default: 5)
             use_expansion: Whether to use query expansion (default: True)
+            chat_history: Formatted conversation history for personalized HyDE expansion
 
         Returns:
             List of top-k documents sorted by relevance
         """
         if use_expansion:
             try:
-                # Step 1: Expand query into 3 variants
-                queries = self.query_expander.expand_query(query)
+                # Step 1: Expand query into 4 variants (original + 3 HyDE passages)
+                queries = self.query_expander.expand_query(query, chat_history=chat_history)
 
                 # Step 2: Retrieve top 10 for each query variant
                 all_docs = []
@@ -101,7 +102,7 @@ class BaseRAGEngine:
             if not chat_history:
                 chat_history = "無"
 
-            docs = self.retrieve(query, k=5, use_expansion=True)
+            docs = self.retrieve(query, k=5, use_expansion=True, chat_history=chat_history)
             context = "\n\n".join(
                 [f"--- 來源: {doc.metadata.get('source')} ---\n{doc.page_content}" for doc in docs]
             )
@@ -118,6 +119,56 @@ class BaseRAGEngine:
             "answer": self._to_text(response.content),
             "sources": sources,
         }
+
+    def generate_stream(self, query: str, use_rag: bool = True, history: List[Dict] = None):
+        """Generator yielding SSE event dicts for verbose pipeline display."""
+        if use_rag:
+            chat_history = ""
+            if history:
+                for msg in history:
+                    role = "使用者" if msg.get("role") == "user" else "AI"
+                    chat_history += f"{role}: {msg.get('content')}\n"
+            if not chat_history:
+                chat_history = "無"
+
+            yield {"step": "expand", "status": "running", "label": "重寫查詢", "data": None}
+            try:
+                queries = self.query_expander.expand_query(query, chat_history=chat_history)
+            except Exception:
+                queries = [query, query, query, query]
+            yield {"step": "expand", "status": "done", "label": "重寫查詢",
+                   "data": {"variants": queries}}
+
+            yield {"step": "retrieve", "status": "running", "label": "向量檢索", "data": None}
+            all_docs = []
+            for q in queries:
+                docs = self.vectorstore.similarity_search(q, k=10)
+                all_docs.extend(docs)
+            yield {"step": "retrieve", "status": "done", "label": "向量檢索",
+                   "data": {"doc_count": len(all_docs)}}
+
+            yield {"step": "rerank", "status": "running", "label": "重新排序", "data": None}
+            try:
+                reranked = self.document_reranker.rerank(query, all_docs, top_k=5)
+            except Exception:
+                reranked = all_docs[:5]
+            yield {"step": "rerank", "status": "done", "label": "重新排序",
+                   "data": {"top_k": len(reranked)}}
+
+            yield {"step": "llm", "status": "running", "label": "LLM 思考中", "data": None}
+            context = "\n\n".join(
+                [f"--- 來源: {doc.metadata.get('source')} ---\n{doc.page_content}" for doc in reranked]
+            )
+            chain = self.rag_prompt | self.llm
+            response = chain.invoke({"context": context, "question": query, "chat_history": chat_history})
+            sources = list(set([doc.metadata.get("source") for doc in reranked]))
+            yield {"type": "result", "answer": self._to_text(response.content), "sources": sources}
+
+        else:
+            yield {"step": "llm", "status": "running", "label": "LLM 思考中", "data": None}
+            chain = self.no_rag | self.llm
+            response = chain.invoke({"question": query, "chat_history": ""})
+            yield {"type": "result", "answer": self._to_text(response.content), "sources": ["Internal Weights"]}
 
     @staticmethod
     def _to_text(content: Any) -> str:

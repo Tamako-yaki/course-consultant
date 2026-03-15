@@ -12,7 +12,10 @@ from langchain_core.prompts import PromptTemplate
 
 
 class QueryExpander:
-    """Expand a single query into multiple variants using Gemini."""
+    """
+    Expand a query into hypothetical answer passages (HyDE) personalized with
+    student context extracted from the conversation history.
+    """
 
     def __init__(self, api_key: str = None, model: str = "gemini-2.5-flash-lite"):
         """
@@ -25,55 +28,57 @@ class QueryExpander:
         self.llm = ChatGoogleGenerativeAI(
             model=model,
             temperature=0.7,
-            max_output_tokens=200,
+            max_output_tokens=600,
             google_api_key=api_key,
         )
 
-        # Prompt template for query expansion
+        # Prompt: extract student context, then produce 3 HyDE document-chunk passages
         self.prompt = PromptTemplate(
-            input_variables=["query"],
-            template="""You are a query expansion expert. Given a user query, generate 2 alternative phrasings of the same query.
+            input_variables=["query", "chat_history"],
+            template="""You are a retrieval assistant for a university course consultation system. The vector store contains policy documents, course catalogs, and academic regulations.
 
-Original Query: {query}
+Internally (do not output this): note any student personal details from the conversation history (major, year, interests, GPA, etc.) and use them to make the passages more targeted.
 
-Generate 2 short and concise alternative phrasings that capture the same intent but use different words and phrasing. Return only the 2 alternatives, one per line, without numbering or explanations.
+Your ONLY output must be exactly 3 short passages that look like raw text chunks that would exist in the vector store and directly contain the answer to the student's query. Each passage should be 1–3 sentences, dense and factual, like a copied excerpt from a university regulation or course catalog — NOT a fluent answer, NOT a rephrased question, NO step labels, NO explanations.
 
-Alternative 1:
-Alternative 2:""",
+Good examples:
+- 英語畢業門檻：大學部學生須於畢業前達到 CEFR B2 等級，或通過校定英語能力鑑定考試。
+- Scholarship eligibility: Full-time students maintaining a GPA above 3.5 with no failing grades in the preceding semester.
+- 選課規定：大三以上學生每學期最多可修 25 學分，需經指導教授簽核。
+
+Conversation History:
+{chat_history}
+
+Student Query: {query}
+
+Output (3 passages, one per line, nothing else):""",
         )
 
-    def expand_query(self, query: str) -> List[str]:
+    def expand_query(self, query: str, chat_history: str = "") -> List[str]:
         """
-        Expand a single query into 3 variants.
+        Expand a query into 4 variants: original + 3 HyDE passages.
 
         Args:
             query: Original query string
+            chat_history: Formatted conversation history string
 
         Returns:
-            List of 3 queries: [original_query, variant_1, variant_2]
+            List of 4 items: [original_query, passage_1, passage_2, passage_3]
         """
         try:
-            # Get LLM response
             chain = self.prompt | self.llm
-            response = chain.invoke({"query": query})
+            response = chain.invoke({"query": query, "chat_history": chat_history or "無"})
             response_text = response.content.strip()
 
-            # Parse the two alternatives from the response
-            lines = [line.strip() for line in response_text.split("\n") if line.strip()]
+            # Each non-empty line is one passage
+            passages = [line.strip() for line in response_text.split("\n") if line.strip()]
 
-            # Extract non-empty lines
-            alternatives = [line for line in lines if line and not line.startswith("Alternative")]
-
-            # Return original query + 2 variants (or fewer if parsing fails)
-            result = [query]
-            result.extend(alternatives[:2])
-
-            return result if len(result) == 3 else [query, query, query]
+            result = [query] + passages[:3]
+            return result if len(result) == 4 else [query, query, query, query]
 
         except Exception as e:
-            # Fallback: return original query 3 times if expansion fails
             print(f"Query expansion failed: {e}. Using original query.")
-            return [query, query, query]
+            return [query, query, query, query]
 
 
 class DocumentReranker:

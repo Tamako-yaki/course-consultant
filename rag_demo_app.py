@@ -1,6 +1,7 @@
 import os
 import sys
-from flask import Flask, render_template, request, jsonify
+import json
+from flask import Flask, render_template, request, jsonify, Response, stream_with_context
 from dotenv import load_dotenv
 
 # Add src to path
@@ -51,6 +52,29 @@ def query():
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+@app.route('/query/stream', methods=['POST'])
+def query_stream():
+    data = request.json
+    question = data.get('question')
+    use_rag = data.get('use_rag', True)
+    history = data.get('history', [])
+
+    if not question:
+        return jsonify({"error": "No question provided"}), 400
+
+    def event_stream():
+        try:
+            for event in get_engine().generate_stream(question, use_rag=use_rag, history=history):
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
+
+    return Response(
+        stream_with_context(event_stream()),
+        mimetype='text/event-stream',
+        headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'},
+    )
 
 if __name__ == '__main__':
     # Ensure templates directory exists
