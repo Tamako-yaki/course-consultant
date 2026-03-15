@@ -3,4 +3,4 @@
 data/faiss_index/
 *.pkl
 *.faiss
-data/*
+data/
