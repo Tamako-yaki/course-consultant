@@ -144,11 +144,11 @@ class BaseRAGEngine:
             except Exception:
                 queries = [query, query, query, query]
             yield {"step": "expand", "status": "done", "label": "重寫查詢",
-                   "data": {"variants": queries}}
+                   "data": {"variants": [query] + queries}}
 
             yield {"step": "retrieve", "status": "running", "label": "向量檢索", "data": None}
             all_docs = []
-            for q in queries:
+            for q in [query] + queries:
                 docs = self.vectorstore.similarity_search(q, k=10)
                 all_docs.extend(docs)
             yield {"step": "retrieve", "status": "done", "label": "向量檢索",
